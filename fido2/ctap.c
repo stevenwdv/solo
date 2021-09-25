@@ -162,13 +162,16 @@ uint8_t ctap_get_info(CborEncoder * encoder)
         ret = cbor_encode_uint(&map, RESP_extensions);
         check_ret(ret);
         {
-            ret = cbor_encoder_create_array(&map, &array, 2);
+            ret = cbor_encoder_create_array(&map, &array, 3);
             check_ret(ret);
             {
                 ret = cbor_encode_text_stringz(&array, "credProtect");
                 check_ret(ret);
 
                 ret = cbor_encode_text_stringz(&array, "hmac-secret");
+                check_ret(ret);
+
+                ret = cbor_encode_text_stringz(&array, "minisign");
                 check_ret(ret);
             }
             ret = cbor_encoder_close_container(&map, &array);
@@ -456,6 +459,7 @@ static int ctap_make_extensions(CTAP_extensions * ext, uint8_t * ext_encoder_buf
     uint8_t hmac_secret_output_is_valid = 0;
     uint8_t hmac_secret_requested_is_valid = 0;
     uint8_t cred_protect_is_valid = 0;
+    uint8_t minisign_is_valid = 0;
     uint8_t hmac_secret_output[64];
     uint8_t shared_secret[32];
     uint8_t hmac[32];
@@ -534,6 +538,11 @@ static int ctap_make_extensions(CTAP_extensions * ext, uint8_t * ext_encoder_buf
             cred_protect_is_valid = 1;
         }
     }
+    if (ext->minisign_present == EXT_MINISIGN_PROCESSED)
+    {
+        extensions_used += 1;
+        minisign_is_valid = 1;
+    }
 
     if (extensions_used > 0)
     {
@@ -568,6 +577,17 @@ static int ctap_make_extensions(CTAP_extensions * ext, uint8_t * ext_encoder_buf
                     check_ret(ret);
 
                     ret = cbor_encode_boolean(&extension_output_map, 1);
+                    check_ret(ret);
+                }
+            }
+            if (minisign_is_valid) {
+                {
+                    ret = cbor_encode_text_stringz(&extension_output_map, "minisign");
+                    check_ret(ret);
+
+                    // add global signature
+                    printf1(TAG_GREEN, "Adding minisign global signature extension\r\n");
+                    ret = cbor_encode_byte_string(&extension_output_map, ext->minisign.input, 64);
                     check_ret(ret);
                 }
             }
@@ -804,25 +824,25 @@ int ctap_encode_der_sig(const uint8_t * const in_sigbuf, uint8_t * const out_sig
 }
 
 // require load_key prior to this
-// @data data to hash before signature, MUST have room to append clientDataHash for ED25519
-// @clientDataHash for signature
-// @tmp buffer for hash.  (can be same as data if data >= 32 bytes)
+// @data1 first block of input data
+// @data2 second block of input data, may be NULL if len2 == 0
+// @hashbuf buffer for hash.  (can be same as data if data >= 32 bytes)
 // @sigbuf OUT location to deposit signature (must be 64 bytes)
 // @sigder OUT location to deposit der signature (must be 72 bytes)
 // @return length of der signature
-int ctap_calculate_signature(uint8_t * data, int datalen, uint8_t * clientDataHash, uint8_t * hashbuf, uint8_t * sigbuf, uint8_t * sigder, int32_t alg)
+int ctap_calculate_signature(uint8_t * data1, int len1, uint8_t * data2, int len2, uint8_t * hashbuf, uint8_t * sigbuf, uint8_t * sigder, int32_t alg)
 {
     // calculate attestation sig
     if (alg == COSE_ALG_EDDSA)
     {
-        crypto_ed25519_sign(data, datalen, clientDataHash, CLIENT_DATA_HASH_SIZE, sigder); // not DER, just plain binary!
+        crypto_ed25519_sign(data1, len1, data2, len2, sigder); // not DER, just plain binary!
         return 64;
     }
     else
     {
         crypto_sha256_init();
-        crypto_sha256_update(data, datalen);
-        crypto_sha256_update(clientDataHash, CLIENT_DATA_HASH_SIZE);
+        crypto_sha256_update(data1, len1);
+        if (len2) crypto_sha256_update(data2, len2);
         crypto_sha256_final(hashbuf);
 
         crypto_ecc256_sign(hashbuf, 32, sigbuf);
@@ -1032,7 +1052,7 @@ uint8_t ctap_make_credential(CborEncoder * encoder, uint8_t * request, int lengt
     }
 
     crypto_ecc256_load_attestation_key();
-    int sigder_sz = ctap_calculate_signature(auth_data_buf, auth_data_sz, MC.clientDataHash, auth_data_buf, sigbuf, sigder, COSE_ALG_ES256);
+    int sigder_sz = ctap_calculate_signature(auth_data_buf, auth_data_sz, MC.clientDataHash, CLIENT_DATA_HASH_SIZE, auth_data_buf, sigbuf, sigder, COSE_ALG_ES256);
     printf1(TAG_MC,"der sig [%d]: ", sigder_sz); dump_hex1(TAG_MC, sigder, sigder_sz);
 
     ret = ctap_add_attest_statement(&map, sigder, sigder_sz);
@@ -1294,7 +1314,10 @@ static CTAP_credentialDescriptor * pop_credential()
 }
 
 // adds 2 to map, or 3 if add_user is true
-uint8_t ctap_end_get_assertion(CborEncoder * map, CTAP_credentialDescriptor * cred, uint8_t * auth_data_buf, unsigned int auth_data_buf_sz, uint8_t * clientDataHash)
+// @minisign_sig may be NULL
+uint8_t ctap_end_get_assertion(CborEncoder * map, CTAP_credentialDescriptor * cred,
+                               uint8_t * auth_data_buf, unsigned int auth_data_buf_sz, uint8_t * clientDataHash,
+                               uint8_t * minisign_sig)
 {
     int ret;
     uint8_t sigbuf[64];
@@ -1314,26 +1337,34 @@ uint8_t ctap_end_get_assertion(CborEncoder * map, CTAP_credentialDescriptor * cr
         check_ret(ret);
     }
 
-    unsigned int cred_size = get_credential_id_size(cred->type);
-    int32_t cose_alg = read_cose_alg_from_masked_credential(&cred->credential.id);
-    if (cose_alg == COSE_ALG_EDDSA)
+    if (minisign_sig)
     {
-        crypto_ed25519_load_key((uint8_t*)&cred->credential.id, cred_size);
+        sigder_sz = 64;
+        memcpy(sigder, minisign_sig, 64);
     }
     else
     {
-        crypto_ecc256_load_key((uint8_t*)&cred->credential.id, cred_size, NULL, 0);
-    }
+        unsigned int cred_size = get_credential_id_size(cred->type);
+        int32_t cose_alg = read_cose_alg_from_masked_credential(&cred->credential.id);
+        if (cose_alg == COSE_ALG_EDDSA)
+        {
+            crypto_ed25519_load_key((uint8_t*)&cred->credential.id, cred_size);
+        }
+        else
+        {
+            crypto_ecc256_load_key((uint8_t*)&cred->credential.id, cred_size, NULL, 0);
+        }
 
-#ifdef ENABLE_U2F_EXTENSIONS
-    if ( extend_fido2(&cred->credential.id, sigder) )
-    {
-        sigder_sz = 72;
-    }
-    else
-#endif
-    {
-        sigder_sz = ctap_calculate_signature(auth_data_buf, auth_data_buf_sz, clientDataHash, auth_data_buf, sigbuf, sigder, cose_alg);
+    #ifdef ENABLE_U2F_EXTENSIONS
+        if ( extend_fido2(&cred->credential.id, sigder) )
+        {
+            sigder_sz = 72;
+        }
+        else
+    #endif
+        {
+            sigder_sz = ctap_calculate_signature(auth_data_buf, auth_data_buf_sz, clientDataHash, CLIENT_DATA_HASH_SIZE, auth_data_buf, sigbuf, sigder, cose_alg);
+        }
     }
 
     printf1(TAG_GREEN, "sigder_sz = %d\n", sigder_sz);
@@ -1411,8 +1442,7 @@ uint8_t ctap_get_next_assertion(CborEncoder * encoder)
     ret = ctap_end_get_assertion(&map, cred,
                                 (uint8_t *)&getAssertionState.buf.authData,
                                 sizeof(CTAP_authDataHeader) + ext_encoder_buf_size,
-                                getAssertionState.clientDataHash);
-
+                                getAssertionState.clientDataHash, NULL);
     check_retr(ret);
 
     ret = cbor_encoder_close_container(encoder, &map);
@@ -1810,6 +1840,7 @@ uint8_t ctap_cred_mgmt(CborEncoder * encoder, uint8_t * request, int length)
 uint8_t ctap_get_assertion(CborEncoder * encoder, uint8_t * request, int length)
 {
     CTAP_getAssertion GA;
+    uint8_t minisign_main_sig[64];
 
     int ret = ctap_parse_get_assertion(&GA,request,length);
 
@@ -1888,6 +1919,25 @@ uint8_t ctap_get_assertion(CborEncoder * encoder, uint8_t * request, int length)
 
     GA.extensions.hmac_secret.credential = &cred->credential;
 
+    if (GA.extensions.minisign_present == EXT_MINISIGN_REQUESTED)
+    {
+        int32_t cose_alg = read_cose_alg_from_masked_credential(&cred->credential.id);
+        if (cose_alg != COSE_ALG_EDDSA)
+        {
+            printf2(TAG_ERR,"minisign only works with EdDSA\n");
+            return CTAP2_ERR_UNSUPPORTED_ALGORITHM;
+        }
+
+        printf1(TAG_GREEN, "Computing minisign signatures\r\n");
+        unsigned int cred_size = get_credential_id_size(cred->type);
+        crypto_ed25519_load_key((uint8_t*)&cred->credential.id, cred_size);
+        ctap_calculate_signature(GA.extensions.minisign.input, MINISIGN_HASH_SIZE, NULL, 0,
+                                 NULL, NULL, minisign_main_sig, COSE_ALG_EDDSA);
+        ctap_calculate_signature(minisign_main_sig, 64, GA.extensions.minisign.trusted_comment, GA.extensions.minisign.trusted_comment_len,
+                                 NULL, NULL, GA.extensions.minisign.input, COSE_ALG_EDDSA);
+        GA.extensions.minisign_present = EXT_MINISIGN_PROCESSED;
+    }
+
     uint32_t auth_data_buf_sz = sizeof(CTAP_authDataHeader);
 
 #ifdef ENABLE_U2F_EXTENSIONS
@@ -1925,7 +1975,8 @@ uint8_t ctap_get_assertion(CborEncoder * encoder, uint8_t * request, int length)
 
     }
 
-    ret = ctap_end_get_assertion(&map, cred, (uint8_t*)&getAssertionState.buf, auth_data_buf_sz, GA.clientDataHash);  // 1,2,3,4
+    ret = ctap_end_get_assertion(&map, cred, (uint8_t*)&getAssertionState.buf, auth_data_buf_sz, GA.clientDataHash,
+                                 GA.extensions.minisign_present == EXT_MINISIGN_PROCESSED ? minisign_main_sig : NULL); // 1,2,3,4
     check_retr(ret);
 
     if (validCredCount > 1)

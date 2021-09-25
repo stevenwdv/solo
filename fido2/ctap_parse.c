@@ -632,6 +632,84 @@ uint8_t ctap_parse_hmac_secret(CborValue * val, CTAP_hmac_secret * hs)
 }
 
 
+uint8_t ctap_parse_minisign(CborValue * val, CTAP_minisign * ms)
+{
+    size_t map_length;
+    size_t trusted_comment_len;
+    uint8_t parsed_count = 0;
+    int key;
+    int ret;
+    unsigned int i;
+    CborValue map;
+
+    if (cbor_value_get_type(val) != CborMapType)
+    {
+        printf2(TAG_ERR,"error, wrong type\n");
+        return CTAP2_ERR_INVALID_CBOR_TYPE;
+    }
+
+    ret = cbor_value_enter_container(val,&map);
+    check_ret(ret);
+
+    ret = cbor_value_get_map_length(val, &map_length);
+    check_ret(ret);
+
+    for (i = 0; i < map_length; i++)
+    {
+        if (cbor_value_get_type(&map) != CborIntegerType)
+        {
+            printf2(TAG_ERR,"Error, expecting CborIntegerTypefor hmac-secret map key, got %s\n", cbor_value_get_type_string(&map));
+            return CTAP2_ERR_INVALID_CBOR_TYPE;
+        }
+        ret = cbor_value_get_int(&map, &key);
+        check_ret(ret);
+
+        ret = cbor_value_advance(&map);
+        check_ret(ret);
+
+        switch(key)
+        {
+            case EXT_MINISIGN_HASH:
+                ret = parse_fixed_byte_string(&map, ms->input, MINISIGN_HASH_SIZE);
+                check_retr(ret);
+                parsed_count++;
+                break;
+            case EXT_MINISIGN_TRUSTED_COMMENT:
+                if (cbor_value_get_type(&map) == CborByteStringType)
+                {
+                    trusted_comment_len = MINISIGN_TRUSTED_COMMENT_MAX_SIZE;
+                    ret = cbor_value_copy_byte_string(&map, ms->trusted_comment, &trusted_comment_len, NULL);
+                    if (ret == CborErrorOutOfMemory)
+                    {
+                        printf2(TAG_ERR,"Error, trusted comment too large\n");
+                        return CTAP2_ERR_LIMIT_EXCEEDED;
+                    }
+                    check_ret(ret);
+                    ms->trusted_comment_len = trusted_comment_len;
+                }
+                else
+                {
+                    printf2(TAG_ERR, "error, CborByteStringType expected for trusted comment\r\n");
+                    return CTAP2_ERR_INVALID_CBOR_TYPE;
+                }
+                parsed_count++;
+                break;
+        }
+
+        ret = cbor_value_advance(&map);
+        check_ret(ret);
+    }
+
+    if (parsed_count != 2)
+    {
+        printf2(TAG_ERR, "ctap_parse_minisign missing parameter.  Got %d.\r\n", parsed_count);
+        return CTAP2_ERR_MISSING_PARAMETER;
+    }
+
+    return 0;
+}
+
+
 uint8_t ctap_parse_extensions(CborValue * val, CTAP_extensions * ext)
 {
     CborValue map;
@@ -704,6 +782,16 @@ uint8_t ctap_parse_extensions(CborValue * val, CTAP_extensions * ext)
                 check_ret(ret);
             } else {
                 printf1(TAG_RED, "warning: credProtect request ignored for being wrong type\r\n");
+            }
+        }
+        else if (strncmp(key, "minisign",8) == 0) {
+            if (cbor_value_get_type(&map) == CborMapType)  {
+                ret = ctap_parse_minisign(&map, &ext->minisign);
+                check_retr(ret);
+                ext->minisign_present = EXT_MINISIGN_REQUESTED;
+                printf1(TAG_CTAP, "parsed minisign request\r\n");
+            } else {
+                printf1(TAG_RED, "warning: minisign request ignored for being wrong type\r\n");
             }
         }
 

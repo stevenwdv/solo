@@ -78,6 +78,12 @@
 #define EXT_CRED_PROTECT_OPTIONAL_WITH_CREDID   0x02
 #define EXT_CRED_PROTECT_REQUIRED               0x03
 
+#define EXT_MINISIGN_HASH            0x01
+#define EXT_MINISIGN_TRUSTED_COMMENT 0x02
+
+#define EXT_MINISIGN_REQUESTED      0x01
+#define EXT_MINISIGN_PROCESSED      0x02
+
 #define CREDID_ALG_ES256            0x0
 #define CREDID_ALG_EDDSA            0x1
 
@@ -124,6 +130,8 @@
 #define DISPLAY_NAME_LIMIT          32  // Must be minimum of 64 bytes but can be more.
 #define ICON_LIMIT                  128 // Must be minimum of 64 bytes but can be more.
 #define CTAP_MAX_MESSAGE_SIZE       1200
+#define MINISIGN_HASH_SIZE          64  //blake2b-512 hash
+#define MINISIGN_TRUSTED_COMMENT_MAX_SIZE 128
 
 #define CREDENTIAL_RK_FLASH_PAD     2   // size of RK should be 8-byte aligned to store in flash easily.
 #define CREDENTIAL_TAG_SIZE         16
@@ -251,9 +259,18 @@ typedef struct
 
 typedef struct
 {
+    uint8_t input[64]; // used for hash but also for global signature if minisign_present == EXT_MINISIGN_PROCESSED
+    uint8_t trusted_comment[MINISIGN_TRUSTED_COMMENT_MAX_SIZE];
+    uint8_t trusted_comment_len;
+} CTAP_minisign;
+
+typedef struct
+{
     uint8_t hmac_secret_present;
     CTAP_hmac_secret hmac_secret;
     uint32_t cred_protect;
+    uint8_t minisign_present;
+    CTAP_minisign minisign;
 } CTAP_extensions;
 
 typedef struct
