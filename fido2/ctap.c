@@ -451,7 +451,8 @@ static int is_cred_id_matching_rk(CredentialId * credId, CTAP_residentKey * rk)
     return (memcmp(credId, &rk->id, sizeof(CredentialId)) == 0);
 }
 
-static int ctap_make_extensions(CTAP_extensions * ext, uint8_t * ext_encoder_buf, unsigned int * ext_encoder_buf_size)
+// @minisign_global_sig NULL if minisign_present == 0
+static int ctap_make_extensions(CTAP_extensions * ext, uint8_t * ext_encoder_buf, unsigned int * ext_encoder_buf_size, uint8_t * minisign_global_sig)
 {
     CborEncoder extensions;
     int ret;
@@ -587,7 +588,7 @@ static int ctap_make_extensions(CTAP_extensions * ext, uint8_t * ext_encoder_buf
 
                     // add global signature
                     printf1(TAG_GREEN, "Adding minisign global signature extension\r\n");
-                    ret = cbor_encode_byte_string(&extension_output_map, ext->minisign.input, 64);
+                    ret = cbor_encode_byte_string(&extension_output_map, minisign_global_sig, 64);
                     check_ret(ret);
                 }
             }
@@ -1035,7 +1036,7 @@ uint8_t ctap_make_credential(CborEncoder * encoder, uint8_t * request, int lengt
         unsigned int ext_encoder_buf_size = sizeof(auth_data_buf) - auth_data_sz;
         uint8_t * ext_encoder_buf = auth_data_buf + auth_data_sz;
 
-        ret = ctap_make_extensions(&MC.extensions, ext_encoder_buf, &ext_encoder_buf_size);
+        ret = ctap_make_extensions(&MC.extensions, ext_encoder_buf, &ext_encoder_buf_size, NULL);
         check_retr(ret);
         if (ext_encoder_buf_size)
         {
@@ -1313,6 +1314,25 @@ static CTAP_credentialDescriptor * pop_credential()
     }
 }
 
+uint8_t compute_minisign_signatures(CTAP_credentialDescriptor * cred, CTAP_minisign * minisign, uint8_t main_sig[64], uint8_t global_sig[64])
+{
+    int32_t cose_alg = read_cose_alg_from_masked_credential(&cred->credential.id);
+    if (cose_alg != COSE_ALG_EDDSA)
+    {
+        printf2(TAG_ERR,"minisign only works with EdDSA\n");
+        return CTAP2_ERR_UNSUPPORTED_ALGORITHM;
+    }
+
+    printf1(TAG_GREEN, "Computing minisign signatures\r\n");
+    unsigned int cred_size = get_credential_id_size(cred->type);
+    crypto_ed25519_load_key((uint8_t*)&cred->credential.id, cred_size);
+    ctap_calculate_signature(minisign->input, MINISIGN_HASH_SIZE, NULL, 0,
+                             NULL, NULL, main_sig, COSE_ALG_EDDSA);
+    ctap_calculate_signature(main_sig, 64, minisign->trusted_comment, minisign->trusted_comment_len,
+                             NULL, NULL, global_sig, COSE_ALG_EDDSA);
+    return 0;
+}
+
 // adds 2 to map, or 3 if add_user is true
 // @minisign_sig may be NULL
 uint8_t ctap_end_get_assertion(CborEncoder * map, CTAP_credentialDescriptor * cred,
@@ -1395,6 +1415,7 @@ uint8_t ctap_get_next_assertion(CborEncoder * encoder)
 {
     int ret;
     CborEncoder map;
+    uint8_t minisign_main_sig[64], minisign_global_sig[64];
 
     CTAP_credentialDescriptor * cred = pop_credential();
 
@@ -1426,8 +1447,16 @@ uint8_t ctap_get_next_assertion(CborEncoder * encoder)
         memset(cred->credential.user.name, 0, USER_NAME_LIMIT);
     }
 
+    if (getAssertionState.extensions.minisign_present == EXT_MINISIGN_REQUESTED)
+    {
+        compute_minisign_signatures(cred, &getAssertionState.extensions.minisign, minisign_main_sig, minisign_global_sig);
+        getAssertionState.extensions.minisign_present = EXT_MINISIGN_PROCESSED;
+    }
+
     unsigned int ext_encoder_buf_size = sizeof(getAssertionState.buf.extensions);
-    ret = ctap_make_extensions(&getAssertionState.extensions, getAssertionState.buf.extensions, &ext_encoder_buf_size);
+    ret = ctap_make_extensions(&getAssertionState.extensions, getAssertionState.buf.extensions, &ext_encoder_buf_size,
+                               getAssertionState.extensions.minisign_present == EXT_MINISIGN_PROCESSED
+                               ? minisign_global_sig : NULL);
 
     if (ret == 0)
     {
@@ -1442,7 +1471,9 @@ uint8_t ctap_get_next_assertion(CborEncoder * encoder)
     ret = ctap_end_get_assertion(&map, cred,
                                 (uint8_t *)&getAssertionState.buf.authData,
                                 sizeof(CTAP_authDataHeader) + ext_encoder_buf_size,
-                                getAssertionState.clientDataHash, NULL);
+                                getAssertionState.clientDataHash,
+                                getAssertionState.extensions.minisign_present == EXT_MINISIGN_PROCESSED
+                                ? minisign_main_sig : NULL);
     check_retr(ret);
 
     ret = cbor_encoder_close_container(encoder, &map);
@@ -1840,7 +1871,7 @@ uint8_t ctap_cred_mgmt(CborEncoder * encoder, uint8_t * request, int length)
 uint8_t ctap_get_assertion(CborEncoder * encoder, uint8_t * request, int length)
 {
     CTAP_getAssertion GA;
-    uint8_t minisign_main_sig[64];
+    uint8_t minisign_main_sig[64], minisign_global_sig[64];
 
     int ret = ctap_parse_get_assertion(&GA,request,length);
 
@@ -1921,20 +1952,7 @@ uint8_t ctap_get_assertion(CborEncoder * encoder, uint8_t * request, int length)
 
     if (GA.extensions.minisign_present == EXT_MINISIGN_REQUESTED)
     {
-        int32_t cose_alg = read_cose_alg_from_masked_credential(&cred->credential.id);
-        if (cose_alg != COSE_ALG_EDDSA)
-        {
-            printf2(TAG_ERR,"minisign only works with EdDSA\n");
-            return CTAP2_ERR_UNSUPPORTED_ALGORITHM;
-        }
-
-        printf1(TAG_GREEN, "Computing minisign signatures\r\n");
-        unsigned int cred_size = get_credential_id_size(cred->type);
-        crypto_ed25519_load_key((uint8_t*)&cred->credential.id, cred_size);
-        ctap_calculate_signature(GA.extensions.minisign.input, MINISIGN_HASH_SIZE, NULL, 0,
-                                 NULL, NULL, minisign_main_sig, COSE_ALG_EDDSA);
-        ctap_calculate_signature(minisign_main_sig, 64, GA.extensions.minisign.trusted_comment, GA.extensions.minisign.trusted_comment_len,
-                                 NULL, NULL, GA.extensions.minisign.input, COSE_ALG_EDDSA);
+        compute_minisign_signatures(cred, &GA.extensions.minisign, minisign_main_sig, minisign_global_sig);
         GA.extensions.minisign_present = EXT_MINISIGN_PROCESSED;
     }
 
@@ -1964,7 +1982,9 @@ uint8_t ctap_get_assertion(CborEncoder * encoder, uint8_t * request, int length)
         {
             unsigned int ext_encoder_buf_size = sizeof(getAssertionState.buf.extensions);
 
-            ret = ctap_make_extensions(&GA.extensions, getAssertionState.buf.extensions, &ext_encoder_buf_size);
+            ret = ctap_make_extensions(&GA.extensions, getAssertionState.buf.extensions, &ext_encoder_buf_size,
+                                       GA.extensions.minisign_present == EXT_MINISIGN_PROCESSED
+                                       ? minisign_global_sig : NULL);
             check_retr(ret);
             if (ext_encoder_buf_size)
             {

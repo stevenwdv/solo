@@ -259,7 +259,7 @@ typedef struct
 
 typedef struct
 {
-    uint8_t input[64]; // used for hash but also for global signature if minisign_present == EXT_MINISIGN_PROCESSED
+    uint8_t input[64];
     uint8_t trusted_comment[MINISIGN_TRUSTED_COMMENT_MAX_SIZE];
     uint8_t trusted_comment_len;
 } CTAP_minisign;
