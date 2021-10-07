@@ -843,7 +843,10 @@ int ctap_calculate_signature(uint8_t * data1, int len1, uint8_t * data2, int len
     {
         crypto_sha256_init();
         crypto_sha256_update(data1, len1);
-        if (len2) crypto_sha256_update(data2, len2);
+        if (len2)
+        {
+            crypto_sha256_update(data2, len2);
+        }
         crypto_sha256_final(hashbuf);
 
         crypto_ecc256_sign(hashbuf, 32, sigbuf);
@@ -1449,7 +1452,8 @@ uint8_t ctap_get_next_assertion(CborEncoder * encoder)
 
     if (getAssertionState.extensions.minisign_present == EXT_MINISIGN_REQUESTED)
     {
-        compute_minisign_signatures(cred, &getAssertionState.extensions.minisign, minisign_main_sig, minisign_global_sig);
+        ret = compute_minisign_signatures(cred, &getAssertionState.extensions.minisign, minisign_main_sig, minisign_global_sig);
+        check_retr(ret);
         getAssertionState.extensions.minisign_present = EXT_MINISIGN_PROCESSED;
     }
 
@@ -1952,7 +1956,8 @@ uint8_t ctap_get_assertion(CborEncoder * encoder, uint8_t * request, int length)
 
     if (GA.extensions.minisign_present == EXT_MINISIGN_REQUESTED)
     {
-        compute_minisign_signatures(cred, &GA.extensions.minisign, minisign_main_sig, minisign_global_sig);
+        ret = compute_minisign_signatures(cred, &GA.extensions.minisign, minisign_main_sig, minisign_global_sig);
+        check_retr(ret);
         GA.extensions.minisign_present = EXT_MINISIGN_PROCESSED;
     }
 

@@ -658,7 +658,7 @@ uint8_t ctap_parse_minisign(CborValue * val, CTAP_minisign * ms)
     {
         if (cbor_value_get_type(&map) != CborIntegerType)
         {
-            printf2(TAG_ERR,"Error, expecting CborIntegerTypefor hmac-secret map key, got %s\n", cbor_value_get_type_string(&map));
+            printf2(TAG_ERR,"Error, expecting CborIntegerTypefor minisign map key, got %s\n", cbor_value_get_type_string(&map));
             return CTAP2_ERR_INVALID_CBOR_TYPE;
         }
         ret = cbor_value_get_int(&map, &key);
