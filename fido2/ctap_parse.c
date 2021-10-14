@@ -636,7 +636,7 @@ uint8_t ctap_parse_minisign(CborValue * val, CTAP_minisign * ms)
 {
     size_t map_length;
     size_t trusted_comment_len;
-    uint8_t parsed_count = 0;
+    size_t hash_parsed = 0, trusted_comment_parsed = 0;
     int key;
     int ret;
     unsigned int i;
@@ -670,11 +670,12 @@ uint8_t ctap_parse_minisign(CborValue * val, CTAP_minisign * ms)
         switch(key)
         {
             case EXT_MINISIGN_HASH:
+                ++hash_parsed;
                 ret = parse_fixed_byte_string(&map, ms->input, MINISIGN_HASH_SIZE);
                 check_retr(ret);
-                parsed_count++;
                 break;
             case EXT_MINISIGN_TRUSTED_COMMENT:
+                ++trusted_comment_parsed;
                 if (cbor_value_get_type(&map) == CborByteStringType)
                 {
                     trusted_comment_len = MINISIGN_TRUSTED_COMMENT_MAX_SIZE;
@@ -692,7 +693,6 @@ uint8_t ctap_parse_minisign(CborValue * val, CTAP_minisign * ms)
                     printf2(TAG_ERR, "error, CborByteStringType expected for trusted comment\r\n");
                     return CTAP2_ERR_INVALID_CBOR_TYPE;
                 }
-                parsed_count++;
                 break;
         }
 
@@ -700,9 +700,16 @@ uint8_t ctap_parse_minisign(CborValue * val, CTAP_minisign * ms)
         check_ret(ret);
     }
 
-    if (parsed_count != 2)
+    if (hash_parsed > 1 || trusted_comment_parsed > 1)
     {
-        printf2(TAG_ERR, "ctap_parse_minisign missing parameter.  Got %d.\r\n", parsed_count);
+        printf2(TAG_ERR, "ctap_parse_minisign duplicate key.\r\n");
+        return CTAP2_ERR_INVALID_CBOR;
+    }
+
+    if (!(hash_parsed && trusted_comment_parsed))
+    {
+        printf2(TAG_ERR, "ctap_parse_minisign missing parameter.  Got %d.\r\n",
+                hash_parsed + trusted_comment_parsed);
         return CTAP2_ERR_MISSING_PARAMETER;
     }
 
