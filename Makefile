@@ -22,13 +22,13 @@ ifeq ($(shell uname -s),Darwin)
 else
   export LDFLAGS = -Wl,--gc-sections
 endif
-LDFLAGS += $(LIBSOLO) $(LIBCBOR) -lsodium
+LDFLAGS += $(LIBSOLO) $(LIBCBOR) crypto/salty/c-api/libsalty.a
 
 
-CFLAGS = -O2 -fdata-sections -ffunction-sections -fcommon -g
+CFLAGS = -O2 -fdata-sections -ffunction-sections -fcommon -g -DUSE_SALTY
 ECC_CFLAGS = -O2 -fdata-sections -ffunction-sections -DuECC_PLATFORM=$(ecc_platform)
 
-INCLUDES =  -I../ -I./fido2/ -I./pc -I../pc -I./tinycbor/src
+INCLUDES =  -I../ -I./fido2/ -I./pc -I../pc -I./tinycbor/src -I../crypto/salty/c-api
 
 CFLAGS += $(INCLUDES)
 CFLAGS += -DAES256=1  -DSOLO_EXPERIMENTAL=1 -DDEBUG_LEVEL=1

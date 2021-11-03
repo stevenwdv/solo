@@ -38,6 +38,8 @@ static void ctap_reset_key_agreement();
 
 struct _getAssertionState getAssertionState;
 
+struct _signifyState signifyState;
+
 // Generate a mask to keep the confidentiality of the "metadata" field in the credential ID.
 // Mask = hmac(device-secret, 14-random-bytes-in-credential-id)
 // Masked_output = Mask ^ metadata
@@ -1173,6 +1175,14 @@ bool is_solo_sign_rpid(const uint8_t * const rpId)
     return strncmp((const char*)rpId, sign_hash_prefix, sizeof(sign_hash_prefix) - 1) == 0;
 }
 
+// @rpId NULL-terminated RP ID
+// @return true if rpId starts with the solo-signify prefix
+bool is_solo_signify_rpid(const uint8_t * const rpId)
+{
+    const char signify_prefix[] = "solo-signify:";
+    return strncmp((const char*)rpId, signify_prefix, sizeof(signify_prefix) - 1) == 0;
+}
+
 // @return the number of valid credentials
 // sorts the credentials.  Most recent creds will be first, invalid ones last.
 int ctap_filter_invalid_credentials(CTAP_getAssertion * GA)
@@ -1541,6 +1551,104 @@ uint8_t ctap_sign_hash(CborEncoder * encoder, uint8_t * request, int length)
     ret = cbor_encoder_close_container(encoder, &map);
     check_ret(ret);
     return 0;
+}
+
+uint8_t ctap_signify_start(CborEncoder * encoder, const uint8_t * request, int length)
+{
+    CTAP_signify sign_req;
+    int ret = ctap_parse_signify(&sign_req, request, length);
+    if (ret != 0)
+    {
+        printf2(TAG_ERR, "Error, ctap_parse_signify failed\n");
+        return ret;
+    }
+
+    if (ctap_is_pin_set())
+    {
+        printf2(TAG_ERR, "Error: PIN required but signify command does not support PIN yet\n");
+        return CTAP2_ERR_PIN_REQUIRED;
+    }
+    ret = ctap2_user_presence_test();
+    check_retr(ret);
+
+    if (! is_solo_signify_rpid(sign_req.rp.id))
+    {
+        printf2(TAG_ERR, "Error: invalid RP ID, should start with 'solo-signify:'\n");
+        return CTAP2_ERR_INVALID_CREDENTIAL;
+    }
+
+    if (! ctap_authenticate_credential(&sign_req.rp, &sign_req.cred))
+    {
+        printf2(TAG_ERR, "Error: invalid credential\n");
+        return CTAP2_ERR_INVALID_CREDENTIAL;
+    }
+
+    unsigned int cred_size = get_credential_id_size(sign_req.cred.type);
+
+    int32_t cose_alg = read_cose_alg_from_masked_credential(&sign_req.cred.credential.id);
+    if (cose_alg == COSE_ALG_EDDSA)
+    {
+        crypto_ed25519_load_key((uint8_t*)&sign_req.cred.credential.id, cred_size);
+
+        uint8_t fake_hash1[64];
+        ctap_generate_rng(fake_hash1, sizeof fake_hash1);
+
+        uint8_t hash2_init[64];
+        crypto_ed25519_sign_get_hash2(fake_hash1, hash2_init, signifyState.secret_r);
+
+        CborEncoder map;
+        ret = cbor_encoder_create_map(encoder, &map, 1);
+        check_ret(ret);
+
+        ret = cbor_encode_int(&map, Signify_RESP_hash1Init);
+        check_ret(ret);
+        ret = cbor_encode_byte_string(&map, hash2_init, sizeof hash2_init);
+        check_ret(ret);
+
+        ret = cbor_encoder_close_container(encoder, &map);
+        check_ret(ret);
+    }
+    else
+    {
+        printf2(TAG_ERR, "Error, unsupported credential algorithm\n");
+        return CTAP2_ERR_UNSUPPORTED_ALGORITHM;
+    }
+    return 0;
+}
+
+uint8_t ctap_signify_finish(CborEncoder * encoder, const uint8_t * request, int length)
+{
+    CborParser parser;
+    CborValue it;
+    int ret = cbor_parser_init(request, length, CborValidateCanonicalFormat, &parser, &it);
+    check_ret(ret);
+
+    CborType type = cbor_value_get_type(&it);
+    if (type != CborByteStringType)
+    {
+        printf2(TAG_ERR, "Error: expecting CborByteStringType\n");
+        return CTAP2_ERR_INVALID_CBOR_TYPE;
+    }
+
+    uint8_t hash2[64];
+    ret = parse_fixed_byte_string(&it, hash2, sizeof hash2);
+    check_retr(ret);
+
+    uint8_t sig[EDDSA_SIGNATURE_SIZE];
+    // Key already loaded
+    crypto_ed25519_sign_finalize(hash2, signifyState.secret_r, sig);
+
+    CborEncoder map;
+    ret = cbor_encoder_create_map(encoder, &map, 1);
+    check_ret(ret);
+
+    ret = cbor_encode_int(&map, Signify_RESP_signature);
+    check_ret(ret);
+    ret = cbor_encode_byte_string(&map, sig, EDDSA_SIGNATURE_SIZE);
+    check_ret(ret);
+
+    ret = cbor_encoder_close_container(encoder, &map);
+    check_ret(ret);
 }
 
 uint8_t ctap_cred_metadata(CborEncoder * encoder)
@@ -1963,9 +2071,9 @@ uint8_t ctap_get_assertion(CborEncoder * encoder, uint8_t * request, int length)
         return CTAP2_ERR_MISSING_PARAMETER;
     }
 
-    if (is_solo_sign_rpid(GA.rp.id))
+    if (is_solo_sign_rpid(GA.rp.id) || is_solo_signify_rpid(GA.rp.id))
     {
-        printf2(TAG_ERR, "Error: solo-sign-hash RP ID cannot be used with getAssertion\n");
+        printf2(TAG_ERR, "Error: solo-sign RP IDs cannot be used with getAssertion\n");
         return CTAP2_ERR_INVALID_CREDENTIAL;
     }
 
@@ -2426,6 +2534,8 @@ uint8_t ctap_request(uint8_t * pkt_raw, int length, CTAP_RESPONSE * resp)
         case CTAP_MAKE_CREDENTIAL:
         case CTAP_GET_ASSERTION:
         case CTAP_SOLO_SIGN:
+        case CTAP_SOLO_SIGNIFY_START:
+        case CTAP_SOLO_SIGNIFY_FINISH:
         case CTAP_CBOR_CRED_MGMT:
         case CTAP_CBOR_CRED_MGMT_PRE:
             if (ctap_device_locked())
@@ -2514,6 +2624,26 @@ uint8_t ctap_request(uint8_t * pkt_raw, int length, CTAP_RESPONSE * resp)
             status = ctap_sign_hash(&encoder, pkt_raw, length);
             resp->length = cbor_encoder_get_buffer_size(&encoder, buf);
             dump_hex1(TAG_DUMP, buf, resp->length);
+            break;
+        case CTAP_SOLO_SIGNIFY_START:
+            printf1(TAG_CTAP,"CTAP_SOLO_SIGNIFY_START\n");
+            status = ctap_signify_start(&encoder, pkt_raw, length);
+            resp->length = cbor_encoder_get_buffer_size(&encoder, buf);
+            dump_hex1(TAG_DUMP, buf, resp->length);
+            break;
+        case CTAP_SOLO_SIGNIFY_FINISH:
+            printf1(TAG_CTAP,"CTAP_SOLO_SIGNIFY_FINISH\n");
+            if (getAssertionState.lastcmd == CTAP_SOLO_SIGNIFY_START)
+            {
+                status = ctap_signify_finish(&encoder, pkt_raw, length);
+                resp->length = cbor_encoder_get_buffer_size(&encoder, buf);
+                dump_hex1(TAG_DUMP, buf, resp->length);
+            }
+            else
+            {
+                printf2(TAG_ERR, "unwanted CTAP_SOLO_SIGNIFY_FINISH.  lastcmd == 0x%02x\n", getAssertionState.lastcmd);
+                status = CTAP2_ERR_NOT_ALLOWED;
+            }
             break;
         case CTAP_CBOR_CRED_MGMT:
         case CTAP_CBOR_CRED_MGMT_PRE:

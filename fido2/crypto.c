@@ -31,7 +31,11 @@
 #include APP_CONFIG
 #include "log.h"
 
-#if defined(STM32L432xx)
+#ifdef STM32L432xx
+# define USE_SALTY
+#endif
+
+#if defined(USE_SALTY)
 #include "salty.h"
 #else
 #include <sodium/crypto_sign_ed25519.h>
@@ -365,7 +369,7 @@ void crypto_aes256_encrypt(uint8_t * buf, int length)
 
 void crypto_ed25519_derive_public_key(uint8_t * data, int len, uint8_t * x)
 {
-#if defined(STM32L432xx)
+#if defined(USE_SALTY)
 
     uint8_t seed[salty_SECRETKEY_SEED_LENGTH];
 
@@ -385,7 +389,7 @@ void crypto_ed25519_derive_public_key(uint8_t * data, int len, uint8_t * x)
 
 void crypto_ed25519_load_key(uint8_t * data, int len)
 {
-#if defined(STM32L432xx)
+#if defined(USE_SALTY)
 
     static uint8_t seed[salty_SECRETKEY_SEED_LENGTH];
 
@@ -430,7 +434,7 @@ void crypto_ed25519_sign(uint8_t * data1, int len1, uint8_t * data2, int len2, u
         memcpy(data + len1, data2, len2);
     }
 
-#if defined(STM32L432xx)
+#if defined(USE_SALTY)
 
     // TODO: check that correct load_key() had been called?
     salty_sign((uint8_t (*)[salty_SECRETKEY_SEED_LENGTH])_signing_key, data, len,
@@ -443,5 +447,33 @@ void crypto_ed25519_sign(uint8_t * data1, int len1, uint8_t * data2, int len2, u
 
 #endif
 }
+
+#ifdef USE_SALTY
+void crypto_ed25519_sign_get_hash1(uint8_t hash1_init[salty_SECRETKEY_NONCE_LENGTH])
+{
+    salty_sign_get_first_hash_init_data((const uint8_t (*)[salty_SECRETKEY_SEED_LENGTH])_signing_key,
+                                        (uint8_t (*)[salty_SECRETKEY_NONCE_LENGTH])hash1_init);
+}
+
+void crypto_ed25519_sign_get_hash2(const uint8_t hash1[CF_SHA512_HASHSZ],
+                                   uint8_t hash2_init[2 * salty_COMPRESSED_Y_LENGTH],
+                                   uint8_t secret_r[salty_SCALAR_LENGTH])
+{
+    salty_sign_get_second_hash_init_data((const uint8_t (*)[salty_SECRETKEY_SEED_LENGTH])_signing_key,
+                                   (const uint8_t (*)[CF_SHA512_HASHSZ])hash1,
+                                   (uint8_t (*)[2 * salty_COMPRESSED_Y_LENGTH])hash2_init,
+                                   (uint8_t (*)[salty_SCALAR_LENGTH])secret_r);
+}
+
+void crypto_ed25519_sign_finalize(const uint8_t hash2[CF_SHA512_HASHSZ],
+                                  const uint8_t secret_r[salty_SCALAR_LENGTH],
+                                  uint8_t sig[salty_SIGNATURE_SERIALIZED_LENGTH])
+{
+    salty_sign_finalize((const uint8_t (*)[salty_SECRETKEY_SEED_LENGTH])_signing_key,
+                        (const uint8_t (*)[CF_SHA512_HASHSZ])hash2,
+                        (const uint8_t (*)[salty_SCALAR_LENGTH])secret_r,
+                        (uint8_t (*)[salty_SIGNATURE_SERIALIZED_LENGTH])sig);
+}
+#endif
 
 #endif
