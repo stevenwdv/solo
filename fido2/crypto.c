@@ -31,10 +31,6 @@
 #include APP_CONFIG
 #include "log.h"
 
-#ifdef STM32L432xx
-# define USE_SALTY
-#endif
-
 #if defined(USE_SALTY)
 #include "salty.h"
 #else

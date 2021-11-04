@@ -9,6 +9,10 @@
 
 #include <stddef.h>
 
+#ifdef STM32L432xx
+# define USE_SALTY
+#endif
+
 void crypto_sha256_init();
 void crypto_sha256_update(uint8_t * data, size_t len);
 void crypto_sha256_update_secret();

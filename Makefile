@@ -16,13 +16,14 @@ obj = $(src:.c=.o)
 
 LIBCBOR = tinycbor/lib/libtinycbor.a
 LIBSOLO = fido2/libsolo.a
+LIBSALTY = crypto/salty/c-api/libsalty.a
 
 ifeq ($(shell uname -s),Darwin)
   export LDFLAGS = -Wl,-dead_strip
 else
   export LDFLAGS = -Wl,--gc-sections
 endif
-LDFLAGS += $(LIBSOLO) $(LIBCBOR) crypto/salty/c-api/libsalty.a
+LDFLAGS += $(LIBSOLO) $(LIBCBOR) $(LIBSALTY)
 
 
 CFLAGS = -O2 -fdata-sections -ffunction-sections -fcommon -g -DUSE_SALTY
@@ -53,6 +54,9 @@ $(LIBCBOR):
 $(LIBSOLO):
 	cd fido2/ && $(MAKE) CFLAGS="$(CFLAGS)" ECC_CFLAGS="$(ECC_CFLAGS)" APP_CONFIG=app.h -j8
 
+$(LIBSALTY):
+	cd crypto/salty/c-api && $(MAKE)
+
 version:
 	@git describe
 
@@ -65,7 +69,7 @@ test: venv
 	$(MAKE) clean
 	$(MAKE) cppcheck
 
-$(name): $(obj) $(LIBCBOR) $(LIBSOLO)
+$(name): $(obj) $(LIBCBOR) $(LIBSOLO) $(LIBSALTY)
 	$(CC) $(LDFLAGS) -o $@ $(obj) $(LDFLAGS)
 
 venv:
