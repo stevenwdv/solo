@@ -1649,6 +1649,8 @@ uint8_t ctap_signify_finish(CborEncoder * encoder, const uint8_t * request, int 
 
     ret = cbor_encoder_close_container(encoder, &map);
     check_ret(ret);
+
+    return 0;
 }
 
 uint8_t ctap_cred_metadata(CborEncoder * encoder)
