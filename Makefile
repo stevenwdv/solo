@@ -55,7 +55,7 @@ $(LIBSOLO):
 	cd fido2/ && $(MAKE) CFLAGS="$(CFLAGS)" ECC_CFLAGS="$(ECC_CFLAGS)" APP_CONFIG=app.h -j8
 
 $(LIBSALTY):
-	cd crypto/salty/c-api && $(MAKE)
+	cd crypto/salty/c-api && $(MAKE) build-noasm-release TARGET=x86_64-unknown-linux-gnu
 
 version:
 	@git describe
