@@ -1120,14 +1120,14 @@ uint8_t ctap_parse_sign_hash(CTAP_signHash * SH, uint8_t * request, int length)
     return 0;
 }
 
-uint8_t ctap_parse_signify(CTAP_signify * sign_req, const uint8_t * request, int length)
+uint8_t ctap_parse_sign_pure(CTAP_sign_pure * sign_req, const uint8_t * request, int length)
 {
     int key;
     size_t i, map_length;
     CborParser parser;
     CborValue it,map;
 
-    memset(sign_req, 0, sizeof(CTAP_signify ));
+    memset(sign_req, 0, sizeof(CTAP_sign_pure ));
     int ret = cbor_parser_init(request, length, CborValidateCanonicalFormat, &parser, &it);
     check_ret(ret);
 
@@ -1162,17 +1162,17 @@ uint8_t ctap_parse_signify(CTAP_signify * sign_req, const uint8_t * request, int
 
         switch(key)
         {
-            case Signify_credential:
-                printf1(TAG_Signify, "Signify_credential\n");
+            case SignPure_credential:
+                printf1(TAG_SignPure, "SignPure_credential\n");
                 ret = parse_credential_descriptor(&map, &sign_req->cred);
                 check_ret(ret);
                 break;
-            case Signify_rpId:
-                printf1(TAG_Signify, "Signify_rpId\n");
+            case SignPure_rpId:
+                printf1(TAG_SignPure, "SignPure_rpId\n");
                 ret = parse_rp_id(&sign_req->rp, &map);
                 check_retr(ret);
 
-                printf1(TAG_Signify, "  ID: %s\n", sign_req->rp.id);
+                printf1(TAG_SignPure, "  ID: %s\n", sign_req->rp.id);
                 break;
         }
         ret = cbor_value_advance(&map);

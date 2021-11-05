@@ -20,8 +20,8 @@
 #define CTAP_VENDOR_FIRST           0x40
 #define CTAP_CBOR_CRED_MGMT_PRE     0x41
 #define CTAP_SOLO_SIGN              0x50
-#define CTAP_SOLO_SIGNIFY_START     0x51
-#define CTAP_SOLO_SIGNIFY_FINISH    0x52
+#define CTAP_SOLO_SIGN_PURE_START   0x51
+#define CTAP_SOLO_SIGN_PURE_FINISH  0x52
 #define CTAP_VENDOR_LAST            0xBF
 
 #define MC_clientDataHash         0x01
@@ -50,10 +50,10 @@
 #define SH_RESP_signature         0x01
 #define SH_RESP_global_signature  0x02
 
-#define Signify_credential        0x01
-#define Signify_rpId              0x02
-#define Signify_RESP_hash1Init    0x01
-#define Signify_RESP_signature    0x01
+#define SignPure_credential       0x01
+#define SignPure_rpId             0x02
+#define SignPure_RESP_hash2Init   0x01
+#define SignPure_RESP_signature   0x01
 
 #define CM_cmd                    0x01
     #define CM_cmdMetadata        0x01
@@ -363,7 +363,7 @@ typedef struct
 {
     CTAP_credentialDescriptor cred;
     struct rpId rp;
-} CTAP_signify;
+} CTAP_sign_pure;
 
 typedef struct
 {
@@ -420,7 +420,7 @@ struct _getAssertionState {
     uint8_t customCredIdSize;
 };
 
-struct _signifyState {
+struct _pureEdDSAState {
     uint8_t secret_r[32];
 };
 

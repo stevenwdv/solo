@@ -38,7 +38,7 @@ static void ctap_reset_key_agreement();
 
 struct _getAssertionState getAssertionState;
 
-struct _signifyState signifyState;
+struct _pureEdDSAState pureEdDSAState;
 
 // Generate a mask to keep the confidentiality of the "metadata" field in the credential ID.
 // Mask = hmac(device-secret, 14-random-bytes-in-credential-id)
@@ -1169,18 +1169,18 @@ static int add_existing_user_info(CTAP_credentialDescriptor * cred)
 
 // @rpId NULL-terminated RP ID
 // @return true if rpId starts with the solo-sign-hash prefix
-bool is_solo_sign_rpid(const uint8_t * const rpId)
+bool is_solo_sign_hash_rpid(const uint8_t * const rpId)
 {
-    const char sign_hash_prefix[] = "solo-sign-hash:";
-    return strncmp((const char*)rpId, sign_hash_prefix, sizeof(sign_hash_prefix) - 1) == 0;
+    const char prefix[] = "solo-sign-hash:";
+    return strncmp((const char*)rpId, prefix, sizeof(prefix) - 1) == 0;
 }
 
 // @rpId NULL-terminated RP ID
-// @return true if rpId starts with the solo-signify prefix
-bool is_solo_signify_rpid(const uint8_t * const rpId)
+// @return true if rpId starts with the solo-sign-pure prefix
+bool is_solo_sign_pure_rpid(const uint8_t * const rpId)
 {
-    const char signify_prefix[] = "solo-signify:";
-    return strncmp((const char*)rpId, signify_prefix, sizeof(signify_prefix) - 1) == 0;
+    const char prefix[] = "solo-sign-pure:";
+    return strncmp((const char*)rpId, prefix, sizeof(prefix) - 1) == 0;
 }
 
 // @return the number of valid credentials
@@ -1465,7 +1465,7 @@ uint8_t ctap_sign_hash(CborEncoder * encoder, uint8_t * request, int length)
     ret = ctap2_user_presence_test();
     check_retr(ret);
 
-    if (! is_solo_sign_rpid(SH.rp.id))
+    if (!is_solo_sign_hash_rpid(SH.rp.id))
     {
         printf2(TAG_ERR, "Error: invalid RP ID, should start with 'solo-sign-hash:'\n");
         return CTAP2_ERR_INVALID_CREDENTIAL;
@@ -1553,27 +1553,27 @@ uint8_t ctap_sign_hash(CborEncoder * encoder, uint8_t * request, int length)
     return 0;
 }
 
-uint8_t ctap_signify_start(CborEncoder * encoder, const uint8_t * request, int length)
+uint8_t ctap_sign_pure_start(CborEncoder * encoder, const uint8_t * request, int length)
 {
-    CTAP_signify sign_req;
-    int ret = ctap_parse_signify(&sign_req, request, length);
+    CTAP_sign_pure sign_req;
+    int ret = ctap_parse_sign_pure(&sign_req, request, length);
     if (ret != 0)
     {
-        printf2(TAG_ERR, "Error, ctap_parse_signify failed\n");
+        printf2(TAG_ERR, "Error, ctap_parse_sign_pure failed\n");
         return ret;
     }
 
     if (ctap_is_pin_set())
     {
-        printf2(TAG_ERR, "Error: PIN required but signify command does not support PIN yet\n");
+        printf2(TAG_ERR, "Error: PIN required but sign-pure command does not support PIN yet\n");
         return CTAP2_ERR_PIN_REQUIRED;
     }
     ret = ctap2_user_presence_test();
     check_retr(ret);
 
-    if (! is_solo_signify_rpid(sign_req.rp.id))
+    if (!is_solo_sign_pure_rpid(sign_req.rp.id))
     {
-        printf2(TAG_ERR, "Error: invalid RP ID, should start with 'solo-signify:'\n");
+        printf2(TAG_ERR, "Error: invalid RP ID, should start with 'solo-sign-pure:'\n");
         return CTAP2_ERR_INVALID_CREDENTIAL;
     }
 
@@ -1594,13 +1594,13 @@ uint8_t ctap_signify_start(CborEncoder * encoder, const uint8_t * request, int l
         ctap_generate_rng(fake_hash1, sizeof fake_hash1);
 
         uint8_t hash2_init[64];
-        crypto_ed25519_sign_get_hash2(fake_hash1, hash2_init, signifyState.secret_r);
+        crypto_ed25519_sign_get_hash2(fake_hash1, hash2_init, pureEdDSAState.secret_r);
 
         CborEncoder map;
         ret = cbor_encoder_create_map(encoder, &map, 1);
         check_ret(ret);
 
-        ret = cbor_encode_int(&map, Signify_RESP_hash1Init);
+        ret = cbor_encode_int(&map, SignPure_RESP_hash2Init);
         check_ret(ret);
         ret = cbor_encode_byte_string(&map, hash2_init, sizeof hash2_init);
         check_ret(ret);
@@ -1616,7 +1616,7 @@ uint8_t ctap_signify_start(CborEncoder * encoder, const uint8_t * request, int l
     return 0;
 }
 
-uint8_t ctap_signify_finish(CborEncoder * encoder, const uint8_t * request, int length)
+uint8_t ctap_sign_pure_finish(CborEncoder * encoder, const uint8_t * request, int length)
 {
     CborParser parser;
     CborValue it;
@@ -1636,13 +1636,13 @@ uint8_t ctap_signify_finish(CborEncoder * encoder, const uint8_t * request, int 
 
     uint8_t sig[EDDSA_SIGNATURE_SIZE];
     // Key already loaded
-    crypto_ed25519_sign_finalize(hash2, signifyState.secret_r, sig);
+    crypto_ed25519_sign_finalize(hash2, pureEdDSAState.secret_r, sig);
 
     CborEncoder map;
     ret = cbor_encoder_create_map(encoder, &map, 1);
     check_ret(ret);
 
-    ret = cbor_encode_int(&map, Signify_RESP_signature);
+    ret = cbor_encode_int(&map, SignPure_RESP_signature);
     check_ret(ret);
     ret = cbor_encode_byte_string(&map, sig, EDDSA_SIGNATURE_SIZE);
     check_ret(ret);
@@ -2073,7 +2073,7 @@ uint8_t ctap_get_assertion(CborEncoder * encoder, uint8_t * request, int length)
         return CTAP2_ERR_MISSING_PARAMETER;
     }
 
-    if (is_solo_sign_rpid(GA.rp.id) || is_solo_signify_rpid(GA.rp.id))
+    if (is_solo_sign_hash_rpid(GA.rp.id) || is_solo_sign_pure_rpid(GA.rp.id))
     {
         printf2(TAG_ERR, "Error: solo-sign RP IDs cannot be used with getAssertion\n");
         return CTAP2_ERR_INVALID_CREDENTIAL;
@@ -2536,8 +2536,8 @@ uint8_t ctap_request(uint8_t * pkt_raw, int length, CTAP_RESPONSE * resp)
         case CTAP_MAKE_CREDENTIAL:
         case CTAP_GET_ASSERTION:
         case CTAP_SOLO_SIGN:
-        case CTAP_SOLO_SIGNIFY_START:
-        case CTAP_SOLO_SIGNIFY_FINISH:
+        case CTAP_SOLO_SIGN_PURE_START:
+        case CTAP_SOLO_SIGN_PURE_FINISH:
         case CTAP_CBOR_CRED_MGMT:
         case CTAP_CBOR_CRED_MGMT_PRE:
             if (ctap_device_locked())
@@ -2627,23 +2627,23 @@ uint8_t ctap_request(uint8_t * pkt_raw, int length, CTAP_RESPONSE * resp)
             resp->length = cbor_encoder_get_buffer_size(&encoder, buf);
             dump_hex1(TAG_DUMP, buf, resp->length);
             break;
-        case CTAP_SOLO_SIGNIFY_START:
-            printf1(TAG_CTAP,"CTAP_SOLO_SIGNIFY_START\n");
-            status = ctap_signify_start(&encoder, pkt_raw, length);
+        case CTAP_SOLO_SIGN_PURE_START:
+            printf1(TAG_CTAP,"CTAP_SOLO_SIGN_PURE_START\n");
+            status = ctap_sign_pure_start(&encoder, pkt_raw, length);
             resp->length = cbor_encoder_get_buffer_size(&encoder, buf);
             dump_hex1(TAG_DUMP, buf, resp->length);
             break;
-        case CTAP_SOLO_SIGNIFY_FINISH:
-            printf1(TAG_CTAP,"CTAP_SOLO_SIGNIFY_FINISH\n");
-            if (getAssertionState.lastcmd == CTAP_SOLO_SIGNIFY_START)
+        case CTAP_SOLO_SIGN_PURE_FINISH:
+            printf1(TAG_CTAP,"CTAP_SOLO_SIGN_PURE_FINISH\n");
+            if (getAssertionState.lastcmd == CTAP_SOLO_SIGN_PURE_START)
             {
-                status = ctap_signify_finish(&encoder, pkt_raw, length);
+                status = ctap_sign_pure_finish(&encoder, pkt_raw, length);
                 resp->length = cbor_encoder_get_buffer_size(&encoder, buf);
                 dump_hex1(TAG_DUMP, buf, resp->length);
             }
             else
             {
-                printf2(TAG_ERR, "unwanted CTAP_SOLO_SIGNIFY_FINISH.  lastcmd == 0x%02x\n", getAssertionState.lastcmd);
+                printf2(TAG_ERR, "unwanted CTAP_SOLO_SIGN_PURE_FINISH.  lastcmd == 0x%02x\n", getAssertionState.lastcmd);
                 status = CTAP2_ERR_NOT_ALLOWED;
             }
             break;

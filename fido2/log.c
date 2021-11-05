@@ -53,7 +53,7 @@ struct logtag tagtable[] = {
     {TAG_CCID, "CCID"},
     {TAG_CM, "CRED_MGMT"},
     {TAG_SH, "SH"},
-    {TAG_Signify, "Signify"},
+    {TAG_SignPure, "SignPure"},
 };
 
 
